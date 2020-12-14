@@ -1,0 +1,259 @@
+---
+title: "Logements Vacants RMarkdown"
+author: "Paula Guillot-Seguier"
+date: "25/11/2020"
+output: html_document
+--- 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Installation de l'environnement de travail 
+
+##Chargement des packages nécessaires
+```{r}
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(questionr)
+library(corrplot)
+library(Hmisc)
+library(lmtest)
+library(margins)
+library(psych)
+library(rmarkdown)
+library(markdown)
+library(ggplot2)
+```
+
+```{r}
+install.packages("rmarkdown")
+install.packages("markdown")
+```
+
+
+##Importation de la base de données
+```{r}
+base_2 <- read.csv("base.csv",sep=',')
+head(base_2)
+```
+##Création des bases de données : parc privé, logements vacants, logements vacants longue durée, logements non vacants. 
+```{r}
+table(base_2$ff_ccogrm)
+
+#Base du parc privé : 
+data_p <- filter(base_2, ff_ccogrm==0 | ff_ccogrm==7 | ff_ccogrm==8 | is.na(ff_ccogrm))
+
+#Création des variables correspondant à la vacance (vacancy), à la vacance longue durée (ld_vacancy), et à la non vacantes 
+data_p$vacancy <- ifelse(data_p$ff_ccthp == 'V', 1, 0)
+data_p$ld_vacancy <- ifelse(data_p$vacancy == 0,0,ifelse(data_p$debutvacance<=2016, 1, 0))
+data_p$ld_vacancy[is.na(data_p$ld_vacancy)]<-0
+table(is.na(data_p$ld_vacancy))
+
+```
+
+## I- Statistiques descriptives  
+
+On cherche à recoder les variables que nous allons retenir pour expliquer la vacance des logements. Pour ce faire, nous produirons des statistiques descriptives bivariées, en observant la fréquence de chacune des modalités des variables dans la base des logements du parc privé (data_p), et en sélectionnant uniquement les logements vacants. 
+
+#1 Statistiques univariées
+#A- Proportions de logements vacants
+```{r}
+print(sum(data_p$vacancy == 1)/nrow(data_p)*100)
+print(sum(data_p$ld_vacancy == 1)/nrow(data_p)*100)
+print(sum(data_p$vacancy == 1)/nrow(data_p)*100)
+print(sum(data_p$ld_vacancy == 1)/sum(data_p$vacancy ==1)*100)
+        
+```
+On observe donc que 
+* 9,6% des logements sont considérés comme vacants, 
+* 3,9% des logements sont en situations de vacance longue durée contre 3,5% en moyenne en France, 
+* 40,7% des logements vacants sont en fait des logements vacants de longue durée
+
+#B Variables liées aux caractéristiques du bien vacant
+
+On recode les variables qui indiquent des précisions géographiques sur le bien vacant. 
+```{r}
+data_p<-rename.variable(data_p,"ff_idsec","cadastre")
+data_p<-rename.variable(data_p,"codgeo_2020","codecommune")
+data_p<-rename.variable(data_p,"ff_ccodep","dep")
+data_p<-rename.variable(data_p,"ff_ndroit","nbdroit")
+data_p<-rename.variable(data_p,"ff_x","geo_x")
+data_p<-rename.variable(data_p,"ff_y","geo_y")  
+```
+
+**Variable : maison** 
+```{r}
+data_p <- rename.variable(data_p,"ff_dteloc","maison")
+data_p$maison[data_p$maison==2] <- 0
+data_p$maison <- as.integer(data_p$maison)
+table(data_p$maison)
+table(data_p$maison[data_p$ld_vacancy == 1])
+
+```
+
+```{r}
+ggplot(data_p,aes(as.factor(ld_vacancy), fill=as.factor(maison)))+
+        geom_bar() + 
+        scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Proportion de maisons et d'appartements")
+ 
+```
+On constate que dans la base du parc privé comme dans l'ensemble des logements vacants de longue durée, la moitié des biens sont des appartements, et l'autre moitié sont des maisons. On crée donc la variable maison. 
+
+**Variable co_prop**
+```{r}
+ggplot(data_p,aes(as.factor(ff_ctpdl), fill=as.factor(ld_vacancy)))+
+        geom_bar(position = "dodge")+ scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Différents types de propriété dans les deux parcs")
+table(data_p$ff_ctpdl)+ scale_fill_discrete(name="Vacance de longue durée", labels=c("Non","Oui"))
+
+
+```
+
+Les statistiques descriptives permettent de faire les observations suivantes : 
+- On trouve beaucoup de valeurs manquantes, qui correspondent aux maisons de la base. 
+- La mention CL, qui signifie copropriété en lot, est très présente dans la base. 
+- Les mentions BND (biens non délimités), CLV (copropriété en lot ou en volume), CV (copropriété en volume) et TF (transparence fiscale) sont marginales dans la base. On décide donc d'effectuer un recodage, en isolant les NA, de toutes les autres mentions, qui sont synonymes d'une situation de copropriété. 
+
+```{r}
+data_p$coprop<-ifelse(data_p$ff_ctpdl == "",0,1)
+table(data_p$coprop)
+
+table(data_p$coprop)
+
+ggplot(data_p,aes(as.factor(coprop), fill=as.factor(ld_vacancy), freq = TRUE))+
+        geom_bar(position = "dodge")+ scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Copropriété dans les deux parcs")+ scale_fill_discrete(name="Vacance de longue durée", labels=c("Non","Oui"))
+
+```
+
+**Date de la construction**
+```{r}
+
+ggplot(data_p, aes(x= ff_jannath), bins = 50 )+
+  geom_histogram(color="darkblue", fill="lightblue") + 
+  labs(title="Année de construction des logements ") +
+        xlab("Années")
+
+```
+On remarque que certains logements ont l'année zero pour année de construction. Il doit sûrement s'agir d'erreurs de saisies, et on décide donc de les remplacer par des valeurs manquantes. 
+
+```{r}
+
+print(summary(data_p$ff_jannath))
+data_p$ff_jannath[data_p$ff_jannath == 0]<- NA
+```
+
+On remarque la variable ff_jannath compte 15 % de valeurs manquantes. On décide de séparer les logements les plus anciens (qui ont une année de construction antérieure au 1er quantile 1900), et les plus récents(année de construction postérieure à la valeur du 3ème quantile 1994) du reste des logements. 
+
+```{r}
+data_p$construction_ancienne <-ifelse(data_p$ff_jannath < 1900, 1, 0  )
+data_p$construcion_ancienne <- na.fill(data_p$construction_ancienne,0)
+
+data_p$construction_recente <-ifelse(data_p$ff_jannath > 1994, 1, 0  )
+data_p$construcion_recente <- na.fill(data_p$construction_recente,0)
+
+print(summary(data_p$ff_jannath))
+print(summary(data_p$construcion_ancienne))
+print(summary(data_p$construcion_recente))
+```
+Pour les valeurs nouvellement créées, on a pris le parti de remplacer les valeurs manquantes par des zéros. 
+
+```{r}
+ggplot(data_p,aes(ff_jannath, fill=as.factor(ld_vacancy), freq = TRUE,))+ geom_bar(position = "fill")+ scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Année de construction des logements")+ scale_fill_discrete(name="Vacance de longue durée", labels=c("Non","Oui"))+
+  geom_histogram(binwidth= 5) + xlim(c(1800, 2020))
+```
+A la lecture de ce graphique, on remarque que les biens les plus anciens semblent contenir plus de logements vacants en longue durée (la part bleue semble plus importante). 
+```{r}
+print(summary(data_p$construction_ancienne[data_p$ld_vacancy == 1]))
+print(summary(data_p$construction_recente[data_p$ld_vacancy == 1]))
+```
+On remarque que 49% des logements vacants longue durée sont comptabilisés comme des logements anciens, alors que seuls 7% sont des logements comptabilisés comme présentant une année de construction récente. 
+
+**Confort du logement**
+
+
+```{r}
+table(data_p$ff_dcapec2)
+summary(data_p$ff_dcapec2)
+```
+On remarque que la grande majorité des logements présents dans la base présente un niveau de confort médian, de niveau 5 ( en effet, le premier quantile, la médiane, et le troisième quantile se trouvent à 5).
+
+```{r}
+ggplot(data_p,aes(as.factor(ff_dcapec2), fill=as.factor(ld_vacancy), freq = TRUE))+
+        geom_bar(position = "fill")+ scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Confort des logements")+ scale_fill_discrete(name="Vacance de longue durée", labels=c("Non","Oui"))
+
+```
+
+On remarque distinctement ci dessus que plus un logement présente un indice de confort élevé (et donc moins il est confortable), plus la proportion de logements vacants longue durée est élevée. 
+
+On décide de créer une variable qui regroupe les logements de confort élevé (1, 2, 3 et 4 ), appelé confort_sup, et une variable qui regroupe les logements de bas confort (7 et 8), confort_inf
+
+
+```{r}
+data_p$confort_sup <-ifelse(data_p$ff_dcapec2 < 5, 1, 0  )
+data_p$confort_sup <- na.fill(data_p$confort_sup,0)
+
+data_p$confort_inf <-ifelse(data_p$ff_dcapec2 > 6 , 1, 0  )
+data_p$confort_inf <- na.fill(data_p$confort_inf,0)
+
+print(summary(data_p$ff_dcapec2))
+print(summary(data_p$confort_inf))
+print(summary(data_p$confort_sup))
+
+```
+
+```{r}
+print(summary(data_p$confort_sup[data_p$ld_vacancy == 1]))
+print(summary(data_p$confort_inf[data_p$ld_vacancy == 1]))
+```
+28% des logements vacants sont de bas confort, et seuls 5% sont de confort élevé. 
+
+**Baignoire**
+
+```{r}
+table(data_p$ff_dnbbai)
+summary(data_p$ff_dnbbai)
+```
+Les logements vacants comptent entre 0 et 21 baignoires. La médiane et le troisième quantile sont 1. On constate sur le graphique ci-dessous que la grande majorité des logements ne comptent pas de baignoire. 
+
+```{r}
+ggplot(data_p,aes(ff_dnbbai, fill=as.factor(ld_vacancy), freq = TRUE))+
+        geom_bar(position = "fill")+ scale_fill_manual(values=c("blue","cornflowerblue")) + 
+  labs(title="Nombre de baignoires")+ scale_fill_discrete(name="Vacance de longue durée", labels=c("Non","Oui")) + xlim(c(-1,8))
+```
+On remarque que la proportion de logements vacants longue durée ne semble pas montrer de tendance claire en fonction du nombre de baignoires dont dispose un logement. Cependant, il est à noter que seule une partie extrêmement réduite de la base de logements compte plus de 6 baignoires. 
+
+On décide de recoder la variable baignoire, en isolant les logements qui ne présentent aucune baignoire, et ceux qui en comptent plus de 3. 
+
+```{r}
+data_p$abs_baign <-ifelse(data_p$ff_dnbbai == 0, 1, 0)
+data_p$abs_baign <- na.fill(data_p$abs_baign,0)
+
+data_p$multi_baign <-ifelse(data_p$ff_dnbbai > 3, 1, 0  )
+data_p$multi_baign <- na.fill(data_p$multi_baign,0)
+
+print(summary(data_p$abs_baign[data_p$ld_vacancy == 1]))
+print(sum(data_p$abs_baign)/nrow(data_p))
+print(summary(data_p$multi_baign[data_p$ld_vacancy == 1]))
+print(sum(data_p$multi_baign)/nrow(data_p))
+print(summary(data_p$ff_dnbbai[data_p$ld_vacancy == 1]))
+```
+69% des logements vacants sont comptabilisés comme ne présentant aucune baignoire (contre 34% dans le reste de la base). 
+0.03% des logements vacants sont comptabilisés comme présentant plus de 3 baignoires (0.04% dans le reste de la base). 
+Les logements vacants ne semblent donc pas se distinguer du reste des logements au regard de leur nombre de baignoires. 
+
+**Douche**
+
+```{r}
+table(data_p$ff_dnbbai)
+summary(data_p$ff_dnbbai)
+```
+
+
+## R Markdown
+
+
